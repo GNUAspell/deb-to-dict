@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e
+
+d/deb-to-dist $ARGV[0]
+tar xfv $(cat thefile)
+cd $(basename $(cat thefile) .tar.bz2)
+./configure
+make
+

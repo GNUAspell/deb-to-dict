@@ -6,7 +6,9 @@ use autodie qw(:all);
 #use IPC::System::Simple(system);
 use 5.012;
 
-die "usage: deb-to-dict PKG [VER]\n" unless @ARGV ==1;
+$ENV{LC_ALL} = 'C';
+
+die "usage: deb-to-dict PKG [VER]\n" unless @ARGV == 1 || @ARGV == 2;
 
 sub cp(@) {system 'cp', '-p', @_;}
 
@@ -20,18 +22,20 @@ my %names = (
     'it' => ['it', 'Italian', 'Italiano'],
     );
 
-# this variables are provided in config file
-our ($NAME, $EMAIL, $DEBDIST, $PROC_SCRIPT);
-do "deb-to-dict.conf";
-
 my $deb = $ARGV[0];
 my $ver = $ARGV[1];
 $ver = 0 unless defined $ver;
 
-$deb =~ /^aspell-([^_]+)_\d/;
-my $debbase = $1;
+$deb = "./$deb" unless $deb =~ m~^/~;
+$deb =~ m~^(.+)/aspell-([^_]+)_\d~;
+my $debdir = $1;
+my $debbase = $2;
 my $base = $names{$debbase}[0];
 my $pkgdir = "$base/aspell";
+
+# this variables are provided in config file
+our ($NAME, $EMAIL, $DEBDIST, $PROC_SCRIPT);
+do "$debdir/deb-to-dict.conf";
 
 system 'mkdir', $base, $pkgdir;
 system 'dpkg-deb', '-R', $deb, $base;
@@ -186,7 +190,20 @@ system "mv $tarball ../..";
 
 chdir "../..";
 
-#system 'rm', '-r', $base;
+system 'rm', '-r', $base;
 
-print "$tarball\n";
+open F, ">thefile";
+print F "$tarball\n";
+close F;
 
+my $dicts = join(' ', keys %dict_info);
+$tarball =~ /(.+)\.tar.bz2$/;
+
+open F, ">testinfo";
+print F <<"---";
+DEBPKG=$deb
+DEB=aspell-$debbase
+PKG=$1
+LANG=$base
+DICTS=$dicts
+---
