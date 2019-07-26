@@ -1,0 +1,192 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings FATAL => 'all';
+use autodie qw(:all);
+#use IPC::System::Simple(system);
+use 5.012;
+
+die "usage: deb-to-dict PKG [VER]\n" unless @ARGV ==1;
+
+sub cp(@) {system 'cp', '-p', @_;}
+
+my %names = (
+    'pt-br' => ['pt_BR', 'Brazilian Portuguese', 'Português do Brasil'],
+    'pt-pt' => ['pt_PT', 'Portuguese', 'Português'],
+    'en' => ['en', 'English'], # used for testing only
+    'de' => ['de', 'German'],
+    'de-1901' => ['de-1901', 'Traditional German'],
+    'da' => ['da', 'Danish', 'Dansk'],
+    'it' => ['it', 'Italian', 'Italiano'],
+    );
+
+# this variables are provided in config file
+our ($NAME, $EMAIL, $DEBDIST, $PROC_SCRIPT);
+do "deb-to-dict.conf";
+
+my $deb = $ARGV[0];
+my $ver = $ARGV[1];
+$ver = 0 unless defined $ver;
+
+$deb =~ /^aspell-([^_]+)_\d/;
+my $debbase = $1;
+my $base = $names{$debbase}[0];
+my $pkgdir = "$base/aspell";
+
+system 'mkdir', $base, $pkgdir;
+system 'dpkg-deb', '-R', $deb, $base;
+
+my @datafiles;
+opendir DH, "$base/usr/lib/aspell";
+while (readdir DH) {
+    next if $_ eq '.' || $_ eq '..';
+    next if /\.rws$/;
+    my $path = "$base/usr/lib/aspell/$_";
+    cp $path, $pkgdir;
+    push @datafiles, $_;
+}
+
+my @dicts;
+opendir DH, "$base/usr/share/aspell";
+while (readdir DH) {
+    next if $_ eq '.' || $_ eq '..';
+    my $path = "$base/usr/share/aspell/$_";
+    cp $path, $pkgdir;
+    push @dicts, $_;
+}
+
+cp '-aT', "$base/usr/share/doc/aspell-$debbase", "$pkgdir/doc";
+system 'mv', "$pkgdir/doc/copyright", "$pkgdir/Copyright";
+
+open F, "$base/DEBIAN/control";
+my $author;
+my $version;
+my $desc;
+my $url;
+while (<F>) {
+    $author = $1 if /^Maintainer: (.+)/;
+    $version = $1 if /^Version: (.+)/;
+    $desc = $1 if /^Description:: (.+)/;
+    $url = $1 if /^Homepage: (.+)/;
+}
+cp "$base/DEBIAN/control", "$pkgdir/doc/debian-control";
+
+my ($author_name, $author_email)
+    = $author =~ /^(.+) <(.+)>$/ or die "can't parse authors email\n";
+$author_email =~ tr/./ /;
+$author_email =~ s/@/ at /;
+$version =~ s/^\d+://;
+
+open F, ">$pkgdir/info";
+
+print F "name_english $names{$debbase}[1]\n";
+print F "name_native $names{$debbase}[2]\n" if defined $names{$debbase}[2];
+print F "lang $base\n";
+print F "version $version-$ver\n";
+print F "copyright Other\n";
+print F "complete unknown\n";
+print F "accurate unknown\n";
+print F "author:\n";
+print F "   name $NAME\n";
+print F "   email $EMAIL\n";
+print F "   maintainer true\n";
+print F "author:\n";
+print F "   name $author_name\n";
+print F "   email $author_email\n";
+print F "   maintainer true\n";
+print F "readme-extra NOTE\n";
+print F "url https://packages.debian.org/$DEBDIST/aspell-$debbase\n";
+print F "source_url $url\n" if defined $url;
+
+my %dict_files;
+my %dict_info;
+my @data_files;
+
+foreach (@datafiles) {
+    next if $_ eq "$base.dat";
+    my $fn = $_;
+    if (/(.+)\.multi$/ || /(de-1901).alias/) {
+        my $n = $1;
+        $n =~ s/^de(_..|)-neu$/de$1/; # aspell-de.deb hack
+        open G, "$pkgdir/$_\n";
+        while (<G>) {
+            s/\#.+//;
+            s/\s+$//;
+            next if $_ eq '';
+            if (/^add (.+)\.rws/) {
+                push @{$dict_info{$n}{add}}, $1;
+                $dict_files{$1} = 1;
+            } elsif (/^add (.+)\.multi/) {
+                push @{$dict_info{$n}{add}}, $1;
+            } else {
+                die "unexpected line in $fn: $_";
+            }
+        }        
+    } elsif (/(.+)\.alias$/) {
+        my $n = $1;
+        next if $n =~ /^de(_..)?$/; # aspell-de.deb hack
+        open G, "$pkgdir/$_\n";
+        while (<G>) {
+            s/\#.+//;
+            s/\s+$//;
+            next if $_ eq '';
+            /^add (.+)\.multi/ or die "unexpected line in $fn: $_";
+            push @{$dict_info{$1}{alias}}, $n;
+        }
+    } else {
+        print F "data-file $_\n";
+    }
+}
+
+foreach my $n (keys %dict_info) {
+    print F "dict:\n";
+    print F "   name $n\n";
+    foreach (@{$dict_info{$n}{alias}}) {
+        print F "   alias $_\n";
+    }
+    foreach (@{$dict_info{$n}{add}}) {
+        print F "   add $_\n";
+    }
+}
+
+foreach (@data_files) {
+    print F "data-file $_\n";
+}
+
+chdir $pkgdir;
+
+open F, ">doc/NOTE";
+print F "\n";
+print F "Extracted from $deb using deb-to-dict.\n";
+close F;
+
+foreach my $n (keys %dict_files) {
+    system "zcat $n.cwl.gz | precat | aspell -l ./$base clean | LC_ALL=C sort -u | prezip > $n.cwl";
+}
+
+system "ln -s $PROC_SCRIPT .";
+system "./proc";
+system "./configure";
+system "make dist";
+
+my @tarballs = <*.tar.bz2>;
+die "can't find final tarball\n" unless @tarballs == 1;
+my $tarball = $tarballs[0];
+my ($dir) = $tarball =~ /(.+)\.tar.bz2$/;
+
+system "tar xf $tarball";
+
+chdir $dir;
+system "./configure";
+system "make";
+
+chdir "..";
+
+system "mv $tarball ../..";
+
+chdir "../..";
+
+#system 'rm', '-r', $base;
+
+print "$tarball\n";
+

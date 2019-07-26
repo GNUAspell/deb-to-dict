@@ -1,0 +1,7 @@
+
+# sample config. file, save as "deb-to-dict.conf";
+
+$NAME = ""; # your name, "Joe Doe";
+$EMAIL = ""; # spam resistant version of your email, ex. "joe at doe com";
+$DEBDIST = "testing";
+$PROC_SCRIPT = "$ENV{HOME}/aspell/lang/proc";
